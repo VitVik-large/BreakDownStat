@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>🛠️ Статистика поломок v2.2</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        :root { --primary: #2d5a52; --bg: #f0f4f3; --danger: #ef4444; --gray: #64748b; --round: #8b5cf6; --accent: #b45309; --excel: #1d6f42; --fleet: #0369a1; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); margin: 0; padding: 15px; color: #1e293b; }
+        .container { max-width: 1600px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; background: #fff; padding: 20px; border-radius: 16px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-left: 6px solid var(--primary); }
+        .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 20px; }
+        .kpi-card { background: #fff; padding: 20px; border-radius: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); position: relative; transition: 0.3s; }
+        .clickable { cursor: pointer; }
+        .clickable:hover { transform: translateY(-3px); box-shadow: 0 10px 15px rgba(0,0,0,0.1); }
+        .kpi-value { font-size: 32px; font-weight: 900; color: var(--primary); display: block; }
+        .kpi-label { font-size: 11px; color: var(--gray); font-weight: bold; text-transform: uppercase; }
+        .details-list { display: none; margin-top: 15px; padding: 10px; border-top: 1px dashed #ddd; text-align: left; max-height: 400px; overflow-y: auto; background: #fcfcfc; border-radius: 8px; }
+        .group-item { padding: 12px; border-radius: 10px; background: #fff; margin-bottom: 8px; border: 1px solid #edf2f7; border-left: 4px solid var(--primary); }
+        .item-header { display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px solid #f1f5f9; padding-bottom: 5px; }
+        .carrier-tag { font-size: 10px; background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .fleet-tag { font-size: 10px; background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .main-grid { display: grid; grid-template-columns: 1.6fr 1.4fr; gap: 25px; }
+        .box { background: #fff; padding: 20px; border-radius: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .table-container { max-height: 500px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { position: sticky; top: 0; background: #f8fafc; padding: 12px; text-align: left; color: var(--gray); border-bottom: 2px solid #f1f5f9; }
+        td { padding: 10px; border-bottom: 1px solid #f1f5f9; }
+        .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; transition: 0.2s; color: white; display: flex; align-items: center; gap: 6px; }
+        .btn-primary { background: var(--primary); }
+        .btn-excel { background: var(--excel); }
+        .btn-fleet { background: var(--fleet); }
+        .btn-mini { padding: 4px 8px; font-size: 10px; background: #f1f5f9; color: var(--round); border: 1px solid var(--round); border-radius: 4px; margin-bottom: 2px; }
+        .btn-repeat { background: #cbd5e1; color: #64748b; cursor: default; }
+        .btn-repeat.active { background: #fff1f2; color: var(--danger); border: 1px solid var(--danger); cursor: pointer; animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        .modal { display: none; position: fixed; z-index: 2000; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); }
+        .modal-content { background: white; width: 550px; margin: 40px auto; padding: 25px; border-radius: 24px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .close-btn { cursor: pointer; font-size: 24px; color: var(--gray); }
+        .loader { position: fixed; inset: 0; background: rgba(255,255,255,0.8); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .sparkline-container { height: 40px; margin-top: 10px; width: 100%; }
+    </style>
+</head>
+<body>
+
+<div id="loader" class="loader"><div class="spinner"></div></div>
+
+<div id="repeatModal" class="modal" onclick="if(event.target===this) closeModal('repeatModal')">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 style="margin:0; color:var(--danger);">⚠️ Повторные поломки</h3>
+            <span class="close-btn" onclick="closeModal('repeatModal')">&times;</span>
+        </div>
+        <div id="repeatList" style="max-height: 400px; overflow-y: auto;"></div>
+    </div>
+</div>
+
+<div id="fleetModal" class="modal" onclick="if(event.target===this) closeModal('fleetModal')">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 style="margin:0; color:var(--fleet);">🚚 Модели в работе</h3>
+            <span class="close-btn" onclick="closeModal('fleetModal')">&times;</span>
+        </div>
+        <div id="fleetList" style="max-height: 300px; overflow-y: auto;"></div>
+        <hr style="margin:15px 0; border:0; border-top:1px solid #eee;">
+        <div style="font-size: 11px; color: var(--gray); margin-bottom: 5px; text-align: center; font-weight: bold;">ГОДА ВЫПУСКА (1СТОРОНА)</div>
+        <div style="height: 180px;"><canvas id="fleetOneWayYearChart"></canvas></div>
+    </div>
+</div>
+
+<div id="roundModal" class="modal" onclick="if(event.target===this) closeModal('roundModal')">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 style="margin:0; color:var(--round);">📈 Аналитика поломок на кругорейсах</h3>
+            <span class="close-btn" onclick="closeModal('roundModal')">&times;</span>
+        </div>
+        <div style="font-size: 11px; color: var(--gray); margin-bottom: 5px; text-align: center;">ПОЛОМКИ ПО ГОДАМ ВЫПУСКА</div>
+        <div style="height: 180px;"><canvas id="roundYearChart"></canvas></div>
+        <hr style="margin:15px 0; border:0; border-top:1px solid #eee;">
+        <div style="font-size: 11px; color: var(--gray); margin-bottom: 5px; text-align: center;">АНТИ-РЕЙТИНГ ПЕРЕВОЗЧИКОВ (КРУГОРЕЙСЫ)</div>
+        <div style="height: 180px;"><canvas id="roundCarrierChart"></canvas></div>
+    </div>
+</div>
+
+<div id="roundFleetModal" class="modal" onclick="if(event.target===this) closeModal('roundFleetModal')">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 style="margin:0; color:var(--round);">📊 Состав парка (Кругорейсы)</h3>
+            <span class="close-btn" onclick="closeModal('roundFleetModal')">&times;</span>
+        </div>
+        <div style="height: 350px;"><canvas id="roundFleetBarChart"></canvas></div>
+    </div>
+</div>
+
+<div class="container">
+    <header>
+        <h2>🛠️<span style="font-weight:300">| Статистика поломок</span></h2>
+        <div style="display:flex; gap:10px; align-items: center;">
+            <div id="repeatIndicator" class="btn btn-repeat" onclick="showRepeats()">🔁 Повторы: <span id="repeatCount">0</span></div>
+            <button onclick="showFleet()" class="btn btn-fleet">🚚 ПАРК</button>
+            <input type="date" id="start-date" style="padding:8px; border-radius:8px; border:1px solid #ddd;">
+            <input type="date" id="end-date" style="padding:8px; border-radius:8px; border:1px solid #ddd;">
+            <button onclick="loadData()" class="btn btn-primary">ЗАГРУЗИТЬ</button>
+            <button onclick="exportToExcel()" class="btn btn-excel">📗 EXCEL</button>
+        </div>
+    </header>
+
+    <div class="kpi-row">
+        <div class="kpi-card">
+            <div class="kpi-label">Всего поломок</div>
+            <span class="kpi-value" id="kpi-total">0</span>
+            <div id="kpi-sub" style="font-size:12px; color:var(--danger);">—</div>
+        </div>
+
+        <div class="kpi-card clickable" onclick="toggleBlock('oldest-details')">
+            <div class="kpi-label">Старое авто с поломками ▼</div>
+            <span class="kpi-value" id="kpi-old-num" style="font-size:22px; color:var(--accent);">—</span>
+            <div id="kpi-old-year" style="font-size:12px; color:var(--gray);">—</div>
+            <div id="oldest-details" class="details-list"></div>
+        </div>
+
+        <div class="kpi-card clickable" onclick="toggleBlock('carrier-details')">
+            <div class="kpi-label">Максимум поломок ▼</div>
+            <span class="kpi-value" id="kpi-worst" style="font-size:18px; color:var(--danger);">—</span>
+            <div id="kpi-worst-stat" style="font-size:12px; color:var(--gray);">—</div>
+            <div id="carrier-details" class="details-list"></div>
+        </div>
+
+        <div class="kpi-card">
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div>
+                    <div class="kpi-label" style="cursor:pointer" onclick="toggleBlock('round-details')">Кругорейсы ▼</div>
+                    <span class="kpi-value" id="kpi-round" style="color: var(--round);">0</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                    <button class="btn-mini" onclick="showRoundAnalysis()">ДЕТАЛИ</button>
+                    <button class="btn-mini" onclick="showRoundFleetGraph()">ГРАФИК</button>
+                    <div id="round-age-percent" style="font-size: 10px; font-weight: bold; color: var(--round);"></div>
+                </div>
+            </div>
+            <div class="sparkline-container"><canvas id="roundSparkline"></canvas></div>
+            <div id="round-details" class="details-list"></div>
+        </div>
+    </div>
+
+    <div class="main-grid">
+        <div class="box">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr><th>Дата</th><th>Госномер</th><th>Год</th><th>Перевозчик</th><th>Комментарий</th></tr>
+                    </thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="box">
+            <div style="height:250px"><canvas id="ageChart"></canvas></div>
+            <hr style="margin:20px 0; border:0; border-top:1px solid #eee;">
+            <div style="height:250px">
+                <div style="font-size: 11px; color: var(--gray); text-align: center; margin-bottom: 5px;">АНТИ-РЕЙТИНГ (НАДЕЖНОСТЬ < 95%)</div>
+                <canvas id="carrierChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API = "https://script.google.com/macros/s/AKfycbxJH4u5CDX1EHMivsMUEElNc169iudv4OJTngJSVHh_BTTapv-wl7mTOnQuy7hTcHL-/exec"; 
+    const KEYWORDS = ['поломка', 'тех причина', 'ремонт', 'сто', 'колесо', 'замена', 'сломался', 'двигатель', 'ходовая','компрессор','гидравлика','электрика'];
+    let breakdowns = [];
+    let repeatCars = [];
+    let fleetModels = {};
+    let charts = {};
+    let roundAgeStat = {}; 
+    let allRoundCarsByYear = {}; 
+    let allOneWayCarsByYear = {}; 
+    let roundFleetCarriersByYear = {}; 
+
+    window.onload = () => {
+        const today = new Date();
+        const start = new Date(); start.setDate(today.getDate() - 14);
+        document.getElementById('end-date').value = today.toISOString().split('T')[0];
+        document.getElementById('start-date').value = start.toISOString().split('T')[0];
+    };
+
+    function toggleBlock(id) {
+        const el = document.getElementById(id);
+        const isVisible = el.style.display === 'block';
+        document.querySelectorAll('.details-list').forEach(d => d.style.display = 'none');
+        el.style.display = isVisible ? 'none' : 'block';
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    async function loadData() {
+        const loader = document.getElementById('loader');
+        loader.style.display = 'flex';
+        try {
+            const s = document.getElementById('start-date').value;
+            const e = document.getElementById('end-date').value;
+            const r = await fetch(`${API}?start=${s}&end=${e}`);
+            
+            if (!r.ok) throw new Error('Сеть ответила с ошибкой');
+            const res = await r.json();
+            
+            if (!res.arr || !res.arr.items) throw new Error('Некорректная структура данных');
+
+            const carMap = {};
+            if (res.carsInfo) res.carsInfo.forEach(c => { if(c.truckNum) carMap[c.truckNum] = c.year; });
+
+            breakdowns = [];
+            fleetModels = {};
+            allRoundCarsByYear = {}; 
+            allOneWayCarsByYear = {};
+            roundFleetCarriersByYear = {};
+            window.allCarrierTripsCount = {};
+            let carFailsCount = {};
+            let seenIds = new Set();
+            let seenCarsOnRound = new Set(); 
+            let seenCarsOnOneWay = new Set();
+            
+            const allItems = [...(res.arr.items || []), ...(res.dep.items || []), ...(res.post.items || [])];
+            
+            allItems.forEach(item => {
+                if (!item || !item.id) return;
+                
+                const year = carMap[item.truckNum] || "Н/Д";
+
+                if (item.tripType && item.tripType.toLowerCase().includes('круг')) {
+                    const carKey = item.truckNum + year;
+                    if (!seenCarsOnRound.has(carKey)) {
+                        if (year !== "Н/Д") {
+                            allRoundCarsByYear[year] = (allRoundCarsByYear[year] || 0) + 1;
+                            if(!roundFleetCarriersByYear[year]) roundFleetCarriersByYear[year] = {};
+                            const cName = item.carrier || "Неизвестно";
+                            roundFleetCarriersByYear[year][cName] = (roundFleetCarriersByYear[year][cName] || 0) + 1;
+                        }
+                        seenCarsOnRound.add(carKey);
+                    }
+                }
+                
+                if (item.tripType && item.tripType.toLowerCase().includes('1 сторона')) {
+                    const carKey = item.truckNum + year;
+                    if (!seenCarsOnOneWay.has(carKey)) {
+                        if (year !== "Н/Д") {
+                            allOneWayCarsByYear[year] = (allOneWayCarsByYear[year] || 0) + 1;
+                        }
+                        seenCarsOnOneWay.add(carKey);
+                    }
+                }
+
+                if(item.truckNum) {
+                    const modelName = item.truckNum.split(' ')[0].toUpperCase();
+                    if(!fleetModels[modelName]) fleetModels[modelName] = { count: 0, carriers: new Set() };
+                    fleetModels[modelName].count++;
+                    fleetModels[modelName].carriers.add(item.carrier || "Неизвестно");
+                }
+
+                if (!seenIds.has(item.id)) {
+                    const cName = item.carrier || "Неизвестно";
+                    window.allCarrierTripsCount[cName] = (window.allCarrierTripsCount[cName] || 0) + 1;
+
+                    const reasonStr = (item.reason || "").toLowerCase();
+                    if (KEYWORDS.some(k => reasonStr.includes(k))) {
+                        item.year = year;
+                        breakdowns.push(item);
+                        if(!carFailsCount[item.truckNum]) carFailsCount[item.truckNum] = {count: 0, carrier: item.carrier};
+                        carFailsCount[item.truckNum].count++;
+                    }
+                    seenIds.add(item.id);
+                }
+            });
+
+            repeatCars = Object.entries(carFailsCount)
+                .filter(entry => entry[1].count >= 2)
+                .map(entry => ({num: entry[0], count: entry[1].count, carrier: entry[1].carrier}));
+
+            updateRepeatIndicator();
+            render(res.totalRec);
+        } catch(e) { 
+            console.error(e); 
+            alert("Ошибка загрузки: " + e.message); 
+        } finally { 
+            loader.style.display = 'none'; 
+        }
+    }
+
+    function updateRepeatIndicator() {
+        const ind = document.getElementById('repeatIndicator');
+        const count = document.getElementById('repeatCount');
+        count.innerText = repeatCars.length;
+        if(repeatCars.length > 0) ind.classList.add('active');
+        else ind.classList.remove('active');
+    }
+
+    function render(totalTrips) {
+        const tbody = document.getElementById('table-body');
+        const carrierDetails = document.getElementById('carrier-details');
+        const roundDetails = document.getElementById('round-details');
+        const oldestDetails = document.getElementById('oldest-details');
+        
+        tbody.innerHTML = ''; carrierDetails.innerHTML = ''; roundDetails.innerHTML = ''; oldestDetails.innerHTML = '';
+        let carrierStat = {}, ageStat = {}, oldestCar = {year: 2050, num: ""}, roundCount = 0;
+        roundAgeStat = {}; 
+
+        breakdowns.sort((a,b) => {
+            const dateA = a.date ? a.date.split('.').reverse().join('') : '';
+            const dateB = b.date ? b.date.split('.').reverse().join('') : '';
+            return dateB.localeCompare(dateA);
+        });
+
+        breakdowns.forEach(b => {
+            const cName = b.carrier || "Неизвестно";
+            if (!carrierStat[cName]) carrierStat[cName] = [];
+            carrierStat[cName].push(b);
+
+            if (b.year && b.year !== "Н/Д") {
+                const yr = parseInt(b.year);
+                ageStat[yr] = (ageStat[yr] || 0) + 1;
+                if (yr < oldestCar.year) { oldestCar.year = yr; oldestCar.num = b.truckNum; }
+                
+                if (b.tripType && b.tripType.toLowerCase().includes('круг')) {
+                    if(!roundAgeStat[yr]) roundAgeStat[yr] = { total: 0, carriers: {} };
+                    roundAgeStat[yr].total++;
+                    roundAgeStat[yr].carriers[cName] = (roundAgeStat[yr].carriers[cName] || 0) + 1;
+                }
+            }
+
+            if (b.tripType && b.tripType.toLowerCase().includes('круг')) {
+                roundCount++;
+                roundDetails.innerHTML += `<div class="group-item" style="border-left-color: var(--round);"><div class="item-header"><b>Авто: ${b.truckNum}</b> <span class="carrier-tag">${b.carrier}</span></div><small>ID: ${b.id} | ${b.date}<br><b>Маршрут:</b> ${b.route}<br><b>Причина:</b> ${b.reason}</small></div>`;
+            }
+
+            tbody.innerHTML += `<tr><td>${b.date}</td><td><b>${b.truckNum}</b></td><td>${b.year}</td><td>${b.carrier}</td><td><small>${b.reason}</small></td></tr>`;
+        });
+
+        if (oldestCar.num) {
+            document.getElementById('kpi-old-num').innerText = oldestCar.num;
+            document.getElementById('kpi-old-year').innerText = oldestCar.year + " г.в.";
+            breakdowns.filter(b => b.truckNum === oldestCar.num).forEach(oi => {
+                oldestDetails.innerHTML += `<div class="group-item" style="border-left-color: var(--accent);"><div class="item-header"><b>ID: ${oi.id}</b> <span class="carrier-tag">${oi.carrier}</span></div><small>${oi.date} | ${oi.route} <br> <b>Причина:</b> ${oi.reason}</small></div>`;
+            });
+        }
+
+        const sortedCarriers = Object.entries(carrierStat).sort((a,b) => b[1].length - a[1].length);
+        const worst = sortedCarriers[0];
+        if (worst) {
+            document.getElementById('kpi-worst').innerText = worst[0];
+            document.getElementById('kpi-worst-stat').innerText = worst[1].length + " поломок";
+            worst[1].forEach(wi => {
+                carrierDetails.innerHTML += `<div class="group-item" style="border-left-color: var(--danger);"><div class="item-header"><b>Авто: ${wi.truckNum}</b> <span class="carrier-tag">${wi.carrier}</span></div><small>Рейс #${wi.id} | ${wi.date}<br><b>Коммент:</b> ${wi.reason}</small></div>`;
+            });
+        }
+
+        document.getElementById('kpi-round').innerText = roundCount;
+        document.getElementById('kpi-total').innerText = breakdowns.length;
+        document.getElementById('kpi-sub').innerText = totalTrips ? `${((breakdowns.length/totalTrips)*100).toFixed(1)}% от всех рейсов` : '—';
+        
+        updateCharts(carrierStat, ageStat);
+    }
+
+    function updateCharts(cStat, aStat) {
+        Object.values(charts).forEach(c => c && c.destroy());
+
+        const yrLabels = Object.keys(aStat).sort();
+        charts.a = new Chart(document.getElementById('ageChart'), { 
+            type: 'bar', 
+            data: { labels: yrLabels, datasets: [{ label: 'Поломки по годам выпуска', data: yrLabels.map(y => aStat[y]), backgroundColor: '#8b5cf6' }] }, 
+            options: { maintainAspectRatio: false } 
+        });
+
+        const roundLabels = Object.keys(roundAgeStat).sort();
+        charts.s = new Chart(document.getElementById('roundSparkline'), {
+            type: 'line',
+            data: { 
+                labels: roundLabels, 
+                datasets: [{ data: roundLabels.map(y => roundAgeStat[y].total), borderColor: '#8b5cf6', fill: true, backgroundColor: 'rgba(139, 92, 246, 0.1)', tension: 0.4, pointRadius: 0 }] 
+            },
+            options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } } }
+        });
+
+        const allCounts = window.allCarrierTripsCount || {};
+        let filteredData = Object.keys(allCounts).map(name => {
+            const total = allCounts[name];
+            const fails = (cStat[name] || []).length;
+            const reliability = total > 0 ? ((total - fails) / total) * 100 : 100;
+            return { name, total, fails, reliability };
+        }).filter(d => d.reliability < 95 && d.fails > 0).sort((a, b) => b.fails - a.fails).slice(0, 10);
+
+        charts.c = new Chart(document.getElementById('carrierChart'), { 
+            type: 'bar', 
+            data: { labels: filteredData.map(d => d.name), datasets: [{ label: 'Поломки', data: filteredData.map(d => d.fails), backgroundColor: '#ef4444', customData: filteredData }] }, 
+            options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => { const d = ctx.dataset.customData[ctx.dataIndex]; return [`Поломок: ${d.fails}`, `Всего: ${d.total}`, `Надежность: ${d.reliability.toFixed(1)}%`]; } } } } } 
+        });
+    }
+
+    function showFleet() {
+        const list = document.getElementById('fleetList');
+        list.innerHTML = '';
+        const sorted = Object.entries(fleetModels).sort((a,b) => b[1].count - a[1].count);
+        if(sorted.length === 0) list.innerHTML = '<div style="text-align:center; padding:20px; color:gray;">Нет данных</div>';
+        else {
+            sorted.forEach(([model, data]) => {
+                list.innerHTML += `<div class="group-item" style="border-left-color: var(--fleet);"><div class="item-header"><b style="font-size:14px;">${model}</b> <span class="fleet-tag">Всего: ${data.count}</span></div><small><b>Перевозчики:</b> ${Array.from(data.carriers).join(', ')}</small></div>`;
+            });
+        }
+        document.getElementById('fleetModal').style.display = 'block';
+        
+        setTimeout(() => {
+            if(charts.fOneWay) charts.fOneWay.destroy();
+            const labels = Object.keys(allOneWayCarsByYear).sort();
+            charts.fOneWay = new Chart(document.getElementById('fleetOneWayYearChart'), {
+                type: 'bar',
+                data: {
+                    labels: labels.map(l => l + ' г.'),
+                    datasets: [{ label: 'Кол-во машин', data: labels.map(l => allOneWayCarsByYear[l]), backgroundColor: '#0369a1', borderRadius: 4 }]
+                },
+                options: { 
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                }
+            });
+        }, 100);
+    }
+
+    function showRepeats() {
+        if(repeatCars.length === 0) return;
+        const list = document.getElementById('repeatList');
+        list.innerHTML = '';
+        repeatCars.forEach(car => {
+            list.innerHTML += `<div class="group-item" style="border-left-color: var(--danger);"><div class="item-header"><b>${car.num}</b> <span class="carrier-tag">${car.count} поломки</span></div><small><b>Перевозчик:</b> ${car.carrier}</small></div>`;
+        });
+        document.getElementById('repeatModal').style.display = 'block';
+    }
+
+    function showRoundAnalysis() {
+        document.getElementById('roundModal').style.display = 'block';
+        setTimeout(() => renderRoundCharts(), 100);
+    }
+
+    function renderRoundCharts() {
+        if (charts.r) charts.r.destroy();
+        if (charts.rc) charts.rc.destroy();
+
+        const labelsFails = Object.keys(roundAgeStat).sort();
+        
+        charts.r = new Chart(document.getElementById('roundYearChart'), {
+            type: 'bar',
+            data: {
+                labels: labelsFails.map(l => l + ' г.в.'),
+                datasets: [{ label: 'Поломки', data: labelsFails.map(l => roundAgeStat[l].total), backgroundColor: '#8b5cf6', roundData: labelsFails.map(l => roundAgeStat[l].carriers) }]
+            },
+            options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => { const carriers = ctx.dataset.roundData[ctx.dataIndex]; let lines = [`Всего поломок: ${ctx.raw}`, '----------------']; Object.entries(carriers).sort((a,b)=>b[1]-a[1]).forEach(([n,c])=>lines.push(`${n}: ${c}`)); return lines; } } } } }
+        });
+
+        const roundCarrierStat = {};
+        breakdowns.forEach(b => {
+            if (b.tripType && b.tripType.toLowerCase().includes('круг')) {
+                const c = b.carrier || "Неизвестно";
+                roundCarrierStat[c] = (roundCarrierStat[c] || 0) + 1;
+            }
+        });
+
+        const sortedRC = Object.entries(roundCarrierStat).sort((a,b) => b[1] - a[1]).slice(0, 8);
+
+        charts.rc = new Chart(document.getElementById('roundCarrierChart'), {
+            type: 'bar',
+            data: {
+                labels: sortedRC.map(d => d[0]),
+                datasets: [{ label: 'Поломки', data: sortedRC.map(d => d[1]), backgroundColor: '#ef4444' }]
+            },
+            options: { 
+                indexAxis: 'y', 
+                maintainAspectRatio: false, 
+                plugins: { legend: { display: false } },
+                scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    }
+
+    function showRoundFleetGraph() {
+        document.getElementById('roundFleetModal').style.display = 'block';
+        if(charts.rf) charts.rf.destroy();
+
+        const labels = Object.keys(allRoundCarsByYear).sort();
+        const totalRoundCars = Object.values(allRoundCarsByYear).reduce((a, b) => a + b, 0);
+        
+        // РАСЧЕТ ПРОЦЕНТА (11 ЛЕТ)
+        const currentYear = new Date().getFullYear();
+        const limitYear = currentYear - 11;
+        let freshCarsCount = 0;
+        Object.entries(allRoundCarsByYear).forEach(([year, count]) => {
+            if (parseInt(year) >= limitYear) freshCarsCount += count;
+        });
+        const FreshPercent = totalRoundCars > 0 ? ((freshCarsCount / totalRoundCars) * 100).toFixed(0) : 0;
+        document.getElementById('round-age-percent').innerText = FreshPercent + '% (от ' + limitYear + ' г.)';
+
+        charts.rf = new Chart(document.getElementById('roundFleetBarChart'), {
+            type: 'bar',
+            data: {
+                labels: labels.map(l => l + ' г.в.'),
+                datasets: [{
+                    label: 'Кол-во машин',
+                    data: labels.map(l => allRoundCarsByYear[l]),
+                    backgroundColor: '#0369a1',
+                    borderRadius: 5
+                }]
+            },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const year = labels[ctx.dataIndex];
+                                const count = ctx.raw;
+                                const percent = totalRoundCars > 0 ? ((count / totalRoundCars) * 100).toFixed(1) : 0;
+                                const carriers = roundFleetCarriersByYear[year] || {};
+                                let lines = [`Машин: ${count} (${percent}%)`, '--- Компании ---'];
+                                Object.entries(carriers).sort((a,b) => b[1] - a[1]).forEach(([name, val]) => lines.push(`${name}: ${val}`));
+                                return lines;
+                            }
+                        }
+                    }
+                },
+                scales: { y: { beginAtZero: true, grid: { display: false } } }
+            }
+        });
+    }
+
+    function exportToExcel() {
+        if (!breakdowns || breakdowns.length === 0) { alert("Нет данных для экспорта."); return; }
+        try {
+            const dataForExcel = breakdowns.map(b => ({ 
+                "Дата": b.date, 
+                "Рейс ID": b.id, 
+                "Госномер": b.truckNum, 
+                "Год выпуска": b.year, 
+                "Перевозчик": b.carrier, 
+                "Тип рейса": b.tripType || "—", 
+                "Маршрут": b.route || "—", 
+                "Детализация поломки": b.reason 
+            }));
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.json_to_sheet(dataForExcel);
+            ws['!cols'] = [{wch: 12}, {wch: 15}, {wch: 15}, {wch: 12}, {wch: 25}, {wch: 15}, {wch: 35}, {wch: 60}];
+            XLSX.utils.book_append_sheet(wb, ws, "Детализация поломок");
+            XLSX.writeFile(wb, `Аналитика_поломок_${new Date().toISOString().split('T')[0]}.xlsx`);
+        } catch (err) {
+            console.error(err);
+            alert("Ошибка при формировании Excel");
+        }
+    }
+</script>
+</body>
+</html>
