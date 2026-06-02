@@ -170,7 +170,7 @@
 </div>
 
 <script>
-    const API = "https://script.google.com/macros/s/AKfycbxJH4u5CDX1EHMivsMUEElNc169iudv4OJTngJSVHh_BTTapv-wl7mTOnQuy7hTcHL-/exec"; 
+    const API = "https://script.google.com/macros/s/AKfycbw1lMmS3B7AnkHR2w8dfmIDP-7UlyPbRpLd5ln1u_2jIUXIyQ6iZftImQkliRSk1_iX/exec"; 
     const KEYWORDS = ['поломка', 'тех причина', 'ремонт', 'сто', 'колесо', 'замена', 'сломался', 'двигатель', 'ходовая','компрессор','гидравлика','электрика'];
     let breakdowns = [];
     let repeatCars = [];
@@ -197,7 +197,7 @@
 
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
-    async function loadData() {
+async function loadData() {
         const loader = document.getElementById('loader');
         loader.style.display = 'flex';
         try {
@@ -213,23 +213,67 @@
             const carMap = {};
             if (res.carsInfo) res.carsInfo.forEach(c => { if(c.truckNum) carMap[c.truckNum] = c.year; });
 
+            // 1. Собираем все поломки
+            let rawBreakdowns = [];
+            let seenIds = new Set();
+            const allItems = [...(res.arr.items || []), ...(res.dep.items || []), ...(res.post.items || [])];
+
+            allItems.forEach(item => {
+                if (!item || !item.id || seenIds.has(item.id)) return;
+                const reasonStr = (item.reason || "").toLowerCase();
+                if (KEYWORDS.some(k => reasonStr.includes(k))) {
+                    const dateObj = new Date(item.date.split('.').reverse().join('-'));
+                    item.dateObj = dateObj; // Для сортировки
+                    item.year = carMap[item.truckNum] || "Н/Д";
+                    rawBreakdowns.push(item);
+                }
+                seenIds.add(item.id);
+            });
+
+            // 2. Фильтрация поломок: группируем по машине и схлопываем
             breakdowns = [];
+            const carsGroup = {};
+            rawBreakdowns.forEach(b => {
+                if(!carsGroup[b.truckNum]) carsGroup[b.truckNum] = [];
+                carsGroup[b.truckNum].push(b);
+            });
+
+            Object.keys(carsGroup).forEach(truck => {
+                let list = carsGroup[truck].sort((a, b) => a.dateObj - b.dateObj);
+                if (list.length === 0) return;
+
+                let filtered = [list[0]];
+                for (let i = 1; i < list.length; i++) {
+                    let prev = filtered[filtered.length - 1];
+                    let curr = list[i];
+                    
+                    // Условие: одинаковый рейс ИЛИ разница в датах <= 1 день
+                    let diffDays = (curr.dateObj - prev.dateObj) / (1000 * 60 * 60 * 24);
+                    
+                    if (curr.id === prev.id || diffDays <= 1) {
+                        // Считаем как одну поломку, ничего не добавляем, 
+                        // можно обновить комментарий, если нужно
+                    } else {
+                        filtered.push(curr);
+                    }
+                }
+                breakdowns.push(...filtered);
+            });
+
+            // 3. Статистика для графиков и KPI (на основе отфильтрованных breakdowns)
             fleetModels = {};
             allRoundCarsByYear = {}; 
             allOneWayCarsByYear = {};
-            roundFleetCarriersByYear = {};
+            roundFleetCarriersByYear = {}; 
             window.allCarrierTripsCount = {};
             let carFailsCount = {};
-            let seenIds = new Set();
             let seenCarsOnRound = new Set(); 
             let seenCarsOnOneWay = new Set();
             
-            const allItems = [...(res.arr.items || []), ...(res.dep.items || []), ...(res.post.items || [])];
-            
             allItems.forEach(item => {
-                if (!item || !item.id) return;
-                
                 const year = carMap[item.truckNum] || "Н/Д";
+                const cName = item.carrier || "Неизвестно";
+                window.allCarrierTripsCount[cName] = (window.allCarrierTripsCount[cName] || 0) + 1;
 
                 if (item.tripType && item.tripType.toLowerCase().includes('круг')) {
                     const carKey = item.truckNum + year;
@@ -237,43 +281,29 @@
                         if (year !== "Н/Д") {
                             allRoundCarsByYear[year] = (allRoundCarsByYear[year] || 0) + 1;
                             if(!roundFleetCarriersByYear[year]) roundFleetCarriersByYear[year] = {};
-                            const cName = item.carrier || "Неизвестно";
                             roundFleetCarriersByYear[year][cName] = (roundFleetCarriersByYear[year][cName] || 0) + 1;
                         }
                         seenCarsOnRound.add(carKey);
                     }
                 }
-                
                 if (item.tripType && item.tripType.toLowerCase().includes('1 сторона')) {
                     const carKey = item.truckNum + year;
                     if (!seenCarsOnOneWay.has(carKey)) {
-                        if (year !== "Н/Д") {
-                            allOneWayCarsByYear[year] = (allOneWayCarsByYear[year] || 0) + 1;
-                        }
+                        if (year !== "Н/Д") allOneWayCarsByYear[year] = (allOneWayCarsByYear[year] || 0) + 1;
                         seenCarsOnOneWay.add(carKey);
                     }
                 }
-
                 if(item.truckNum) {
                     const modelName = item.truckNum.split(' ')[0].toUpperCase();
                     if(!fleetModels[modelName]) fleetModels[modelName] = { count: 0, carriers: new Set() };
                     fleetModels[modelName].count++;
-                    fleetModels[modelName].carriers.add(item.carrier || "Неизвестно");
+                    fleetModels[modelName].carriers.add(cName);
                 }
+            });
 
-                if (!seenIds.has(item.id)) {
-                    const cName = item.carrier || "Неизвестно";
-                    window.allCarrierTripsCount[cName] = (window.allCarrierTripsCount[cName] || 0) + 1;
-
-                    const reasonStr = (item.reason || "").toLowerCase();
-                    if (KEYWORDS.some(k => reasonStr.includes(k))) {
-                        item.year = year;
-                        breakdowns.push(item);
-                        if(!carFailsCount[item.truckNum]) carFailsCount[item.truckNum] = {count: 0, carrier: item.carrier};
-                        carFailsCount[item.truckNum].count++;
-                    }
-                    seenIds.add(item.id);
-                }
+            breakdowns.forEach(b => {
+                carFailsCount[b.truckNum] = (carFailsCount[b.truckNum] || {count: 0, carrier: b.carrier});
+                carFailsCount[b.truckNum].count++;
             });
 
             repeatCars = Object.entries(carFailsCount)
@@ -289,7 +319,6 @@
             loader.style.display = 'none'; 
         }
     }
-
     function updateRepeatIndicator() {
         const ind = document.getElementById('repeatIndicator');
         const count = document.getElementById('repeatCount');
@@ -536,28 +565,45 @@
     }
 
     function exportToExcel() {
-        if (!breakdowns || breakdowns.length === 0) { alert("Нет данных для экспорта."); return; }
-        try {
-            const dataForExcel = breakdowns.map(b => ({ 
+    if (!breakdowns || breakdowns.length === 0) { alert("Нет данных для экспорта."); return; }
+    try {
+        const dataForExcel = breakdowns.map(b => {
+            // Расчет отклонения
+            let diffStr = "—";
+            if (b.pArr && b.fArr) {
+                let diffMs = b.fArr - b.pArr;
+                let sign = diffMs < 0 ? "-" : "";
+                let absMs = Math.abs(diffMs);
+                let hours = Math.floor(absMs / (1000 * 60 * 60));
+                let minutes = Math.floor((absMs % (1000 * 60 * 60)) / (1000 * 60));
+                diffStr = sign + hours + ":" + (minutes < 10 ? "0" : "") + minutes;
+            }
+
+            return { 
                 "Дата": b.date, 
                 "Рейс ID": b.id, 
                 "Госномер": b.truckNum, 
                 "Год выпуска": b.year, 
                 "Перевозчик": b.carrier, 
                 "Тип рейса": b.tripType || "—", 
-                "Маршрут": b.route || "—", 
+                "Маршрут": b.route || "—",
+                "Отклонение (ч:мм)": diffStr, // Новая колонка
                 "Детализация поломки": b.reason 
-            }));
-            const wb = XLSX.utils.book_new();
-            const ws = XLSX.utils.json_to_sheet(dataForExcel);
-            ws['!cols'] = [{wch: 12}, {wch: 15}, {wch: 15}, {wch: 12}, {wch: 25}, {wch: 15}, {wch: 35}, {wch: 60}];
-            XLSX.utils.book_append_sheet(wb, ws, "Детализация поломок");
-            XLSX.writeFile(wb, `Аналитика_поломок_${new Date().toISOString().split('T')[0]}.xlsx`);
-        } catch (err) {
-            console.error(err);
-            alert("Ошибка при формировании Excel");
-        }
+            };
+        });
+        
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(dataForExcel);
+        // Добавляем ширину для новой колонки
+        ws['!cols'] = [{wch: 12}, {wch: 15}, {wch: 15}, {wch: 12}, {wch: 25}, {wch: 15}, {wch: 35}, {wch: 15}, {wch: 60}];
+        
+        XLSX.utils.book_append_sheet(wb, ws, "Детализация поломок");
+        XLSX.writeFile(wb, `Аналитика_поломок_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+        console.error(err);
+        alert("Ошибка при формировании Excel");
     }
+}
 </script>
 </body>
 </html>
